@@ -1,3 +1,5 @@
+<!-- Reconciled 2026-05-29: auth warning moved to top. Needs review before repo commit and push. -->
+
 # nodus-a2a
 
 **A2A 1.0.0 (Linux Foundation) protocol adapter for the [Nodus](https://github.com/Masterplanner25/Nodus) scripting language.**
@@ -7,6 +9,38 @@ message-only agent over HTTP+JSON/REST.  It is the third artifact in the
 coordinated launch with **nodus-lang 4.0.0** and **nodus-mcp 0.1.0**.
 
 > **Status:** v0.1.0 — prepared, not yet published (three-artifact launch).
+
+---
+
+## Production authentication warning
+
+**Without a `token_validator`, the server runs in dev mode and accepts all requests.**
+Production deployments must configure a validator:
+
+```python
+config = ServerConfig(
+    ...
+    token_validator=lambda token: token == os.environ["MY_SECRET_TOKEN"],
+)
+```
+
+Do not expose a nodus-a2a server to the internet without configuring `token_validator`.
+
+---
+
+## v0.1 scope
+
+This is a message-only implementation (D5 decision). The server **never creates A2A Tasks**.
+All task-management operations return HTTP 501. Deferred to v0.2+:
+- Task lifecycle and state machine
+- SSE streaming (`SendStreamingMessage`)
+- Push notification webhooks
+- JSON-RPC and gRPC bindings
+- OAuth 2.0 / OIDC / mTLS auth
+
+See `docs/design/05-deferred-features.md` for the full inventory.
+
+---
 
 ---
 
