@@ -1,0 +1,22 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "nodus-a2a"
+version = "0.1.0"
+description = "A2A 1.0.0 (LF) adapter for the Nodus scripting language"
+requires-python = ">=3.11"
+dependencies = [
+    "nodus-lang>=4.0.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/Masterplanner25/nodus-a2a"
+Repository = "https://github.com/Masterplanner25/nodus-a2a"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/nodus_a2a"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
