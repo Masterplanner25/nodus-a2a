@@ -21,3 +21,11 @@ packages = ["src/nodus_a2a"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 pythonpath = ["src"]
+
+[tool.coverage.run]
+source = ["src/nodus_a2a"]
+omit = ["src/nodus_a2a/__main__.py"]  # CLI entry-point; not exercised by unit tests
+
+[tool.coverage.report]
+fail_under = 80
+show_missing = true
