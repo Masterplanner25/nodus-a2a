@@ -241,7 +241,28 @@ def test_codec_roundtrip():
 
 def test_capability_honesty():
     """D5/D10: streaming, pushNotifications, extendedAgentCard must all be false."""
-    pytest.skip("Phase B not yet implemented — build_agent_card() required")
+    from nodus_a2a.card import build_agent_card
+    from nodus_a2a.config import ServerConfig
+
+    config = ServerConfig(
+        base_url="https://example.com",
+        agent_name="Invariant Test Agent",
+        agent_description="Used by the capability-honesty invariant test",
+    )
+    card = build_agent_card(config, [])
+    caps = card.get("capabilities", {})
+
+    assert caps.get("streaming") is False, (
+        "D5 violation: capabilities.streaming must be False (streaming deferred to v0.2)"
+    )
+    assert caps.get("pushNotifications") is False, (
+        "D10 violation: capabilities.pushNotifications must be False "
+        "(push notifications deferred to v0.2)"
+    )
+    assert caps.get("extendedAgentCard") is False, (
+        "D8b violation: capabilities.extendedAgentCard must be False "
+        "(extended card deferred to v0.2)"
+    )
 
 
 # ---------------------------------------------------------------------------
