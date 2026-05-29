@@ -20,3 +20,4 @@ packages = ["src/nodus_a2a"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["src"]
