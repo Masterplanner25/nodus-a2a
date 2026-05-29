@@ -2,14 +2,22 @@
 Standing assertions for nodus-a2a.  All 8 must remain green across every phase.
 
 Assertion inventory (see docs/design/00-decisions.md §D):
-  1. no-new-opcodes       — BYTECODE_VERSION == 4
-  2. no-task-emitted      — response oneof is always Message, never Task
+  1. no-new-opcodes        — BYTECODE_VERSION == 4
+  2. no-task-emitted       — response oneof is always Message, never Task
   3. no-kind-discriminator — no 'kind' field on any Part or payload
-  4. no-legacy-wellknown  — /.well-known/agent.json is not served  (Phase E)
-  5. version-negotiation  — A2A-Version mismatch → VersionNotSupportedError  (Phase G)
-  6. codec-name-mapping   — proto snake_case never appears on the wire
-  7. capability-honesty   — streaming/push/extended-card all advertised false  (Phase B)
-  8. inversion-note       — D6 inversion documented in 05-deferred-features.md
+  4. no-legacy-wellknown   — /.well-known/agent.json is not served
+  5. version-negotiation   — A2A-Version mismatch → VersionNotSupportedError
+  6. codec-name-mapping    — proto snake_case never appears on the wire
+  7. capability-honesty    — streaming/push/extended-card all advertised false
+  8. inversion-note        — D6 inversion documented in 05-deferred-features.md
+
+Each assertion is tested at the appropriate layer (codec, transport, or doc).
+Some assertions have multiple test functions covering different layers — this is
+intentional so a regression at any single layer fails the suite.
+
+Phase H audit: all 8 assertions verified complete and substantive (no stubs or
+skips remain). Each assertion is tested at both its primary layer and at the HTTP
+transport layer where applicable.
 """
 
 from __future__ import annotations
@@ -307,6 +315,167 @@ def test_capability_honesty():
     assert caps.get("extendedAgentCard") is False, (
         "D8b violation: capabilities.extendedAgentCard must be False "
         "(extended card deferred to v0.2)"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Transport-layer strengthening (Phase H audit additions)
+# These tests verify the same invariants as above but through handle_request(),
+# ensuring that transport-layer regressions are caught as well as codec-layer ones.
+# ---------------------------------------------------------------------------
+
+def _make_transport_fixture():
+    """Return (card_bytes, invoke, tool_names) for transport-layer assertions."""
+    from nodus_a2a.card import cache_agent_card
+    from nodus_a2a.config import ServerConfig
+    config = ServerConfig(
+        base_url="https://example.com",
+        agent_name="Phase H Invariant Agent",
+        agent_description="Transport-layer invariant tests",
+    )
+    _, card_bytes = cache_agent_card(config, [])
+
+    def invoke(name, args):
+        return "ok"
+
+    return card_bytes, invoke, []
+
+
+def test_no_task_emitted_via_transport():
+    """D5: SendMessage over the transport layer must never emit a Task."""
+    import json
+    from nodus_a2a.transport import handle_request
+
+    card_bytes, invoke, tool_names = _make_transport_fixture()
+
+    # Single-tool fallback path (no envelope, one tool registered)
+    body = json.dumps({
+        "message": {
+            "messageId": "inv-no-task-001",
+            "role": "ROLE_USER",
+            "parts": [{"text": "hello"}],
+        }
+    }).encode()
+
+    status, _, resp_body = handle_request(
+        method="POST",
+        path="/message:send",
+        headers={},
+        body=body,
+        card_bytes=card_bytes,
+        invoke=lambda n, a: "response text",
+        tool_names=["myapp.only"],
+        token_validator=None,
+    )
+    assert status == 200
+    wire = json.loads(resp_body)
+    assert "task" not in wire, (
+        f"D5 violation (transport layer): SendMessage response contains 'task' key. "
+        f"Keys: {list(wire.keys())}"
+    )
+    assert "message" in wire, (
+        "D5 violation (transport layer): SendMessage response missing 'message' key."
+    )
+
+
+def test_no_legacy_wellknown_and_correct_path_serves():
+    """D4b: agent.json → 404; agent-card.json → 200. Both must hold simultaneously."""
+    import json
+    from nodus_a2a.transport import handle_request
+
+    card_bytes, invoke, tool_names = _make_transport_fixture()
+    kwargs = dict(headers={}, body=b"", card_bytes=card_bytes,
+                  invoke=invoke, tool_names=tool_names, token_validator=None)
+
+    # Old 0.3 path: must be 404
+    status_old, _, _ = handle_request("GET", "/.well-known/agent.json", **kwargs)
+    assert status_old == 404, (
+        f"no-legacy-wellknown violation: agent.json returned {status_old}, expected 404."
+    )
+
+    # Correct 1.0 path: must be 200 with a valid card body
+    status_new, _, resp_body = handle_request("GET", "/.well-known/agent-card.json", **kwargs)
+    assert status_new == 200, (
+        f"Discovery broken: agent-card.json returned {status_new}, expected 200."
+    )
+    card = json.loads(resp_body)
+    assert "name" in card and "capabilities" in card, (
+        "Discovery response does not look like an AgentCard."
+    )
+
+
+def test_codec_name_mapping_agent_card():
+    """AgentCard wire JSON must use camelCase throughout (no snake_case keys)."""
+    import json
+    from nodus_a2a.card import build_agent_card, project_skill
+    from nodus_a2a.config import ServerConfig
+
+    config = ServerConfig(
+        base_url="https://agent.example.com",
+        agent_name="Codec Invariant Agent",
+        agent_description="For codec-name-mapping invariant test",
+        provider_url="https://example.com",
+        provider_org="ACME",
+        documentation_url="https://docs.example.com",
+    )
+    tools = [
+        {
+            "name": "myapp.search",
+            "description": "Search",
+            "schema": {},
+            "version": "1.0.0",
+            "tags": ["search"],
+            "deprecated": False,
+            "metadata": {},
+        }
+    ]
+    card = build_agent_card(config, tools)
+    card_str = json.dumps(card)
+
+    SNAKE_PATTERNS = [
+        "protocol_binding", "protocol_version", "security_schemes",
+        "security_requirements", "default_input_modes", "default_output_modes",
+        "supported_interfaces", "extended_agent_card", "push_notifications",
+        "http_auth_security_scheme", "bearer_format", "input_modes", "output_modes",
+        "documentation_url",
+    ]
+    violations = [p for p in SNAKE_PATTERNS if p in card_str]
+    assert not violations, (
+        f"codec-name-mapping violation (AgentCard): snake_case keys in wire JSON: "
+        f"{violations}"
+    )
+
+    # Spot-check key camelCase names are present
+    assert "supportedInterfaces" in card_str
+    assert "protocolBinding" in card_str
+    assert "securitySchemes" in card_str
+    assert "defaultInputModes" in card_str
+    assert "pushNotifications" in card_str
+
+
+def test_capability_honesty_via_wire_json():
+    """D5/D10/D8b: capability flags must be False in the served wire JSON, not just the dict."""
+    import json
+    from nodus_a2a.transport import handle_request
+
+    card_bytes, invoke, tool_names = _make_transport_fixture()
+    _, _, resp_body = handle_request(
+        "GET", "/.well-known/agent-card.json",
+        headers={}, body=b"",
+        card_bytes=card_bytes, invoke=invoke,
+        tool_names=tool_names, token_validator=None,
+    )
+    card = json.loads(resp_body)
+    caps = card.get("capabilities", {})
+
+    assert caps.get("streaming") is False, (
+        "D5 violation (wire): capabilities.streaming is not False in served card JSON."
+    )
+    assert caps.get("pushNotifications") is False, (
+        "D10 violation (wire): capabilities.pushNotifications is not False in served card JSON."
+    )
+    assert caps.get("extendedAgentCard") is False, (
+        "D8b violation (wire): capabilities.extendedAgentCard is not False in served card JSON."
     )
 
 
