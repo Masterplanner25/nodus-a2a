@@ -134,7 +134,34 @@ def test_no_kind_discriminator():
 
 def test_no_legacy_wellknown():
     """D4b: /.well-known/agent.json must NOT be served (0.3-era path)."""
-    pytest.skip("Phase E not yet implemented — HTTP server required")
+    from nodus_a2a.card import cache_agent_card
+    from nodus_a2a.config import ServerConfig
+    from nodus_a2a.transport import handle_request
+
+    config = ServerConfig(
+        base_url="https://example.com",
+        agent_name="Invariant Agent",
+        agent_description="For invariant tests",
+    )
+    _, card_bytes = cache_agent_card(config, [])
+
+    def _dummy_invoke(name, args):
+        return "ok"
+
+    status, _, _ = handle_request(
+        method="GET",
+        path="/.well-known/agent.json",
+        headers={},
+        body=b"",
+        card_bytes=card_bytes,
+        invoke=_dummy_invoke,
+        tool_names=[],
+        token_validator=None,
+    )
+    assert status == 404, (
+        f"no-legacy-wellknown violation: /.well-known/agent.json returned {status}, "
+        "expected 404. The 0.3-era path must never be served."
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -143,7 +170,25 @@ def test_no_legacy_wellknown():
 
 def test_version_negotiation():
     """D4: A2A-Version != '1.0' must raise VersionNotSupportedError."""
-    pytest.skip("Phase G not yet implemented — negotiate_version() required")
+    from nodus_a2a.errors import VersionNotSupportedError
+    from nodus_a2a.transport import negotiate_version
+
+    # 0.3 must be rejected
+    with pytest.raises(VersionNotSupportedError, match="not supported"):
+        negotiate_version({"A2A-Version": "0.3"})
+
+    # 2.0 must be rejected
+    with pytest.raises(VersionNotSupportedError):
+        negotiate_version({"A2A-Version": "2.0"})
+
+    # 1.0 must be accepted
+    negotiate_version({"A2A-Version": "1.0"})  # no raise
+
+    # 1.0.1 must be accepted (patch version within supported major.minor)
+    negotiate_version({"A2A-Version": "1.0.1"})  # no raise
+
+    # Missing header must be accepted (lenient mode, doc 03 §4.2)
+    negotiate_version({})  # no raise
 
 
 # ---------------------------------------------------------------------------
