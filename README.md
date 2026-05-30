@@ -50,13 +50,13 @@ See `docs/design/05-deferred-features.md` for the full inventory.
 from nodus.runtime.embedding import NodusRuntime
 from nodus_a2a import A2AHttpServer, ServerConfig
 
-# 1. Create a NodusRuntime and register tools
+# 1. Create a NodusRuntime and register tools via tool_registry
 runtime = NodusRuntime()
-runtime.register_tool(
-    name="myapp.greet",
-    description="Greet someone by name",
-    handler=lambda args: f"Hello, {args.get('name', 'world')}!",
-)
+runtime.tool_registry.register({
+    "name": "myapp.greet",           # must use dotted namespace: "prefix.name"
+    "description": "Greet someone by name",
+    "handler": lambda args: f"Hello, {args.get('name', 'world')}!",
+})
 
 # 2. Configure the server
 config = ServerConfig(
