@@ -6,14 +6,22 @@ build-backend = "setuptools.build_meta"
 name = "nodus-a2a"
 version = "0.1.0"
 description = "Agent-to-Agent coordination: registry, delegation, dead letter, and watchdog"
+authors = [{ name = "Shawn Knight" }]
+license = { text = "MIT" }
+readme = "README.md"
 requires-python = ">=3.11"
-license = "MIT"
-authors = [{ name = "Masterplanner25" }]
-dependencies = ["nodus-events>=0.1.0", "nodus-queue>=0.1.0", "nodus-state>=0.1.0"]
+dependencies = []
 
 [project.optional-dependencies]
-test = ["pytest>=8.0"]
+dev = ["pytest>=8.0"]
+
+[project.urls]
+Homepage = "https://github.com/Masterplanner25/nodus-a2a"
+Repository = "https://github.com/Masterplanner25/nodus-a2a"
 
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["nodus_a2a*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

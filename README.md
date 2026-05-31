@@ -1,227 +1,152 @@
-<!-- Reconciled 2026-05-29: auth warning moved to top. Needs review before repo commit and push. -->
-
 # nodus-a2a
 
-**A2A 1.0.0 (Linux Foundation) protocol adapter for the [Nodus](https://github.com/Masterplanner25/Nodus) scripting language.**
+**Agent-to-Agent coordination primitives for Nodus AI systems.**
 
-nodus-a2a exposes `std:tool`-registered tools from a Nodus runtime as an A2A
-message-only agent over HTTP+JSON/REST.  It is the third artifact in the
-coordinated launch with **nodus-lang 4.0.0** and **nodus-mcp 0.1.0**.
+`nodus-a2a` provides the coordination layer between agents: capability-based
+routing, load-aware delegation, dead-letter recovery, and stuck-run detection.
+No external dependencies — stdlib only.
 
-> **Status:** v0.1.0 — prepared, not yet published (three-artifact launch).
+> **Status:** v0.1.0 — prepared, not yet published.
 
 ---
 
-## Production authentication warning
+## Install
 
-**Without a `token_validator`, the server runs in dev mode and accepts all requests.**
-Production deployments must configure a validator:
-
-```python
-config = ServerConfig(
-    ...
-    token_validator=lambda token: token == os.environ["MY_SECRET_TOKEN"],
-)
+```bash
+pip install nodus-a2a
 ```
 
-Do not expose a nodus-a2a server to the internet without configuring `token_validator`.
-
 ---
 
-## v0.1 scope
+## What it provides
 
-This is a message-only implementation (D5 decision). The server **never creates A2A Tasks**.
-All task-management operations return HTTP 501. Deferred to v0.2+:
-- Task lifecycle and state machine
-- SSE streaming (`SendStreamingMessage`)
-- Push notification webhooks
-- JSON-RPC and gRPC bindings
-- OAuth 2.0 / OIDC / mTLS auth
-
-See `docs/design/05-deferred-features.md` for the full inventory.
-
----
+| Component | Purpose |
+|---|---|
+| `AgentRegistry` | Thread-safe registry of agents with capability declarations and load |
+| `AgentCoordinator` | Decides LOCAL vs DELEGATE execution; selects the best available agent |
+| `DelegationRequest` / `DelegationResult` | Typed delegation envelopes |
+| `DeadLetterService` | Records failed delegations; supports replay and drain |
+| `StuckRunWatchdog` | Tracks in-flight runs; fires a callback when timeout elapses |
 
 ---
 
 ## Quick start
 
 ```python
-from nodus.runtime.embedding import NodusRuntime
-from nodus_a2a import A2AHttpServer, ServerConfig
-
-# 1. Create a NodusRuntime and register tools via tool_registry
-runtime = NodusRuntime()
-runtime.tool_registry.register({
-    "name": "myapp.greet",           # must use dotted namespace: "prefix.name"
-    "description": "Greet someone by name",
-    "handler": lambda args: f"Hello, {args.get('name', 'world')}!",
-})
-
-# 2. Configure the server
-config = ServerConfig(
-    base_url="https://myagent.example.com",
-    agent_name="My Greeter Agent",
-    agent_description="Greets people by name via A2A",
+from nodus_a2a import (
+    AgentRegistry, AgentCapabilitySet, AgentHealthStatus,
+    AgentCoordinator, DelegationRequest, ExecutionMode,
 )
 
-# 3. Build the tool list and start the server
-tools = runtime.tool_registry.list_tools()
-tool_names = [t["name"] for t in tools if not t.get("deprecated")]
+registry = AgentRegistry()
+registry.register(AgentCapabilitySet(
+    agent_id="memory-agent",
+    capabilities=["memory.read", "memory.write"],
+    load=0.2,
+    health_status=AgentHealthStatus.HEALTHY,
+))
+registry.register(AgentCapabilitySet(
+    agent_id="flow-agent",
+    capabilities=["flow.run"],
+    load=0.5,
+    health_status=AgentHealthStatus.HEALTHY,
+))
 
-server = A2AHttpServer(
-    config=config,
-    invoke=runtime.tool_registry.invoke,
-    tool_names=tool_names,
-    tools=tools,
+coordinator = AgentCoordinator(registry, local_agent_id="memory-agent")
+req = DelegationRequest(
+    operation={"type": "flow.run", "flow": "my-flow"},
+    required_capabilities=["flow.run"],
+    requesting_agent_id="memory-agent",
 )
-server.serve()  # blocks; use serve_in_thread() for background use
+
+mode = coordinator.decide_mode(req)        # ExecutionMode.DELEGATE
+target = coordinator.select_agent(req)     # flow-agent (lowest load with capability)
 ```
-
-### Calling the agent
-
-Send a tool-call envelope in a DataPart:
-
-```http
-POST /message:send HTTP/1.1
-Content-Type: application/a2a+json
-A2A-Version: 1.0
-
-{
-  "message": {
-    "messageId": "msg-001",
-    "role": "ROLE_USER",
-    "parts": [{"data": {"tool": "myapp.greet", "args": {"name": "Alice"}}}]
-  }
-}
-```
-
-Response:
-
-```json
-{
-  "message": {
-    "messageId": "...",
-    "role": "ROLE_AGENT",
-    "contextId": "...",
-    "parts": [{"text": "Hello, Alice!", "mediaType": "text/plain"}]
-  }
-}
-```
-
-### Single-tool shortcut
-
-If the agent has exactly one tool registered, any `Message` (even a plain `TextPart`)
-dispatches to that tool with empty args:
-
-```json
-{"message": {"messageId": "m1", "role": "ROLE_USER", "parts": [{"text": "hello"}]}}
-```
-
-### Agent Card discovery
-
-The Agent Card is served at `/.well-known/agent-card.json` (A2A 1.0 URI).
-No authentication required.
 
 ---
 
-## Authentication
+## AgentRegistry
 
 ```python
-config = ServerConfig(
-    ...
-    token_validator=lambda token: token == "my-secret-token",
+registry = AgentRegistry()
+registry.register(agent)
+registry.update_load("agent-id", 0.7)     # returns False if unknown
+registry.deregister("agent-id")
+registry.get("agent-id")                  # AgentCapabilitySet | None
+registry.find_capable(["cap.a", "cap.b"]) # sorted by load, UNAVAILABLE excluded
+len(registry)
+```
+
+---
+
+## AgentCoordinator
+
+```python
+coordinator = AgentCoordinator(registry, local_agent_id="my-agent")
+mode = coordinator.decide_mode(request)    # ExecutionMode.LOCAL or DELEGATE
+agent = coordinator.select_agent(request)  # AgentCapabilitySet | None (lowest load)
+```
+
+---
+
+## DeadLetterService
+
+```python
+dlq = DeadLetterService(on_record=my_alert_fn)
+dlq.record(request, result)
+dlq.list()                # all entries
+dlq.list(replayed=True)
+dlq.mark_replayed(req_id) # True if found
+dlq.drain()               # removes all; returns count
+```
+
+---
+
+## StuckRunWatchdog
+
+```python
+watchdog = StuckRunWatchdog(
+    timeout_seconds=300,
+    on_stuck=lambda run_id: logger.warning("stuck: %s", run_id),
 )
+watchdog.track("run-abc")
+watchdog.complete("run-abc")
+stuck = watchdog.check_once()   # list of stuck IDs; fires on_stuck for each
+len(watchdog)
 ```
 
-Without a `token_validator`, the server runs in dev mode and accepts all requests.
-**Production deployments must configure a validator.**
+---
+
+## Health statuses
+
+| Status | Eligible for delegation? |
+|---|---|
+| `HEALTHY` | Yes |
+| `DEGRADED` | Yes (deprioritised by load sort) |
+| `UNAVAILABLE` | No — excluded from `find_capable` |
 
 ---
 
-## Part type dispatch
+## Design
 
-Tool return values are mapped to A2A Part variants automatically:
+- **No external dependencies.** Five modules; stdlib only (`threading`,
+  `dataclasses`, `datetime`, `uuid`, `logging`).
+- **Thread-safe.** `AgentRegistry` and `DeadLetterService` use `threading.Lock`.
+- **No nodus-lang dependency.** Coordinates agents; does not execute Nodus scripts.
 
-| Python type | A2A Part | `mediaType` |
-|-------------|----------|-------------|
-| `str` | TextPart | `text/plain` |
-| `bytes` | RawPart (base64) | `application/octet-stream` |
-| dict / list / int / float / bool / None | DataPart | `application/json` |
-
-The `url` Part variant is not used in automatic dispatch (reserved for v0.2+).
+See `docs/design.md` for design decisions.
 
 ---
 
-## Error handling
+## Development
 
-Tool exceptions are returned as an error DataPart in an HTTP 200 response:
-
-```json
-{
-  "message": {
-    "role": "ROLE_AGENT",
-    "parts": [{"data": {"error": "tool exploded", "type": "RuntimeError"},
-               "mediaType": "application/json"}]
-  }
-}
+```bash
+pip install -e ".[dev]"
+pytest tests/ -q
 ```
 
-Protocol errors (malformed JSON, invalid A2A-Version, missing auth) return
-HTTP 4xx with a structured error body.
-
 ---
 
-## Design notes
+## License
 
-### v0.1 is message-only (D5)
-
-The server never creates or persists A2A Tasks.  All task-management operations
-(`GetTask`, `ListTasks`, `CancelTask`, streaming, push notifications) return
-HTTP 501 `UnsupportedOperationError`.  The Agent Card declares:
-
-```json
-"capabilities": {"streaming": false, "pushNotifications": false, "extendedAgentCard": false}
-```
-
-### v0.2 Task lifecycle: D6 inversion warning
-
-A2A `INPUT_REQUIRED` / `AUTH_REQUIRED` are **park-and-resume** states — the
-opposite of nodus-mcp's no-thread-parks rule.  When implementing Task lifecycle
-in v0.2, do **not** import the nodus-mcp no-park assertion.  See
-`docs/design/05-deferred-features.md §2` for the full inversion note.
-
----
-
-## CLI
-
-```
-python -m nodus_a2a --version
-python -m nodus_a2a serve --name "My Agent" --description "..." --port 8080
-```
-
-The `serve` command starts a server with no tools — useful for smoke-testing
-network connectivity and verifying the Agent Card format.
-
----
-
-## Wire format
-
-- **Spec:** A2A 1.0.0 / `lf.a2a.v1` (proto package)
-- **Transport:** HTTP+JSON/REST only (`protocolBinding: "HTTP+JSON"`)
-- **Content-Type:** `application/a2a+json`
-- **Discovery:** `/.well-known/agent-card.json`
-- **Version negotiation:** `A2A-Version` request header; mismatch → HTTP 400
-- **Codec:** proto `snake_case` ↔ wire `camelCase` (ProtoJSON)
-- **Signing:** unsigned (v0.1); JWS signing planned for v0.2
-
----
-
-## Deferred features (v0.2+)
-
-Task lifecycle and state machine, streaming (`SendStreamingMessage`),
-push notification webhooks, Agent Card signing (JWS/RFC 7515), extended
-authenticated card, JSON-RPC binding, gRPC binding, OAuth2/OIDC/mTLS,
-tenant routing, 0.3 wire-dialect compatibility.
-
-See `docs/design/05-deferred-features.md` for the full inventory.
+MIT — see [LICENSE](LICENSE).

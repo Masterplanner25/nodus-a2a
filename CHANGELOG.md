@@ -11,53 +11,42 @@ Versioning: [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
 ---
 
-## [0.1.0] — 2026-05-29
+## [0.1.0] — 2026-05-30
 
-Initial release — prepare-not-publish (coordinated three-artifact launch with
-nodus-lang 4.0.0 and nodus-mcp 0.1.0).
+Initial release of the AgentCoordinator coordination layer.
+
+> **Note:** An earlier iteration of this repo contained an A2A 1.0.0 wire
+> protocol adapter (HTTP+JSON/REST server, Agent Card, tool-call dispatch).
+> That implementation is preserved on GitHub at the `v0.0.1-a2a-adapter`
+> tag. This release replaces it with the coordination primitives below,
+> which have no external dependencies and no nodus-lang requirement.
 
 ### Added
 
-- **A2A 1.0.0 message-only server** over HTTP+JSON/REST (`A2AHttpServer`).
-- **std:tool → AgentSkill projection** (`project_skill`, `build_agent_card`):
-  tool name, description, tags, and metadata examples projected to AgentSkill;
-  deprecated tools excluded.
-- **Agent Card serving** at `/.well-known/agent-card.json` (1.0 well-known URI;
-  `agent.json` 0.3-era path returns 404).
-- **Part type dispatch**: tool results automatically dispatched to the correct
-  A2A Part variant — `str` → TextPart, `bytes` → RawPart (base64), all other
-  JSON-serializable values → DataPart.
-- **Tool-call-envelope dispatch** via `DataPart(data={"tool": "<name>",
-  "args": {...}})` with single-tool fallback for single-tool agents.
-- **Bearer auth** (`HTTPAuthSecurityScheme`) — token validator callable in
-  `ServerConfig`; dev mode allows all requests when validator is not set.
-- **A2A-Version negotiation** — lenient on missing header, strict on mismatch
-  (`VersionNotSupportedError` → HTTP 400); matches Major.Minor, accepts patch.
-- **Error packaging** — tool exceptions are returned as an error DataPart in an
-  HTTP 200 response (application errors never become HTTP 5xx).
-- **snake_case ↔ camelCase codec** throughout (`mediaType`, `messageId`,
-  `contextId`, `protocolBinding`, etc.); proto field names never leak to wire.
-- **8 standing assertions** (`test_invariants.py`) covering no-new-opcodes,
-  no-task-emitted, no-kind-discriminator, no-legacy-wellknown, version-
-  negotiation, codec-name-mapping, capability-honesty, and inversion-note.
-- **169 tests** (unit, transport, integration) with 93% source coverage.
-- **CLI entry-point** (`python -m nodus_a2a serve`) for smoke-testing
-  connectivity and Agent Card serving.
+- **AgentRegistry** — thread-safe registry of agents keyed by `agent_id`.
+  Stores `AgentCapabilitySet` (capabilities list, load 0–1, health status).
+  `find_capable(caps)` returns agents sorted by load, excluding `UNAVAILABLE`.
+  `update_load`, `deregister`, `get`, `len`.
 
-### Design decisions
+- **AgentCoordinator** — decides `ExecutionMode.LOCAL` vs `DELEGATE` for a
+  `DelegationRequest`. Selects the lowest-load capable agent via `select_agent`.
 
-- **D5 (message-only archetype)**: server never emits a Task in v0.1. All
-  task-management operations return `UnsupportedOperationError` (HTTP 501).
-- **D6 (inversion note)**: A2A `INPUT_REQUIRED` is the park-and-resume model.
-  The nodus-mcp no-thread-parks rule must NOT be imported into a2a v0.2 Task
-  lifecycle. This is documented in `docs/design/05-deferred-features.md §2`.
-- **BYTECODE_VERSION**: stays 4. Zero new nodus-lang opcodes introduced.
+- **DelegationRequest / DelegationResult** — typed delegation envelopes.
+  `DelegationRequest` carries `operation`, `required_capabilities`,
+  `requesting_agent_id`, `user_id`, and a UUID `id`. `DelegationResult`
+  carries `success`, optional `result` / `error`, and `target_agent`.
 
-### Deferred to v0.2+
+- **DeadLetterService** — records failed `DelegationResult`s with their
+  originating request. `list(replayed?)`, `mark_replayed(id)`, `drain()`,
+  optional `on_record` callback, `len`.
 
-Task lifecycle, streaming (`SendStreamingMessage`), push notifications, Agent
-Card signing (D8a), extended/authenticated card (D8b), JSON-RPC binding,
-gRPC, OAuth2/OIDC/mTLS, tenant routing, 0.3 wire-dialect compatibility.
-See `docs/design/05-deferred-features.md` for the full inventory.
+- **StuckRunWatchdog** — tracks in-flight runs by ID; `check_once()` returns
+  run IDs that have exceeded `timeout_seconds` and fires the `on_stuck`
+  callback for each.
+
+- **23 tests** in `tests/test_a2a.py` covering all five components.
+
+- **No external dependencies** — stdlib only (`threading`, `dataclasses`,
+  `datetime`, `uuid`, `logging`).
 
 [0.1.0]: https://github.com/Masterplanner25/nodus-a2a/releases/tag/v0.1.0
