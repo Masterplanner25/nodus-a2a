@@ -6,7 +6,7 @@
 routing, load-aware delegation, dead-letter recovery, and stuck-run detection.
 No external dependencies — stdlib only.
 
-> **Status:** v0.1.0 — prepared, not yet published.
+> **Status:** v0.1.0 — published on [PyPI](https://pypi.org/project/nodus-a2a/).
 
 ---
 
